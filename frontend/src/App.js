@@ -285,7 +285,7 @@ export default function App() {
           cursor: "pointer"
         }}
       >
-        ❤️ Donate to the Stream
+        Donate to the Stream
       </button>
       <DonationModal
         open={donationOpen}
