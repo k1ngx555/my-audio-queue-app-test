@@ -240,7 +240,6 @@ export default function App() {
     }
     setQueue(q => [...q, { id: Date.now().toString(), name: userName }]);
     setIsInQueue(true);
-    addNotification(`${userName} joined the queue.`, "success`);
   };
 
   const leaveQueue = () => {
