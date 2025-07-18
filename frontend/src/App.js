@@ -49,7 +49,7 @@ function QueuePanel({ queue, currentSpeaker, onPromote, onRemove }) {
       padding: "1rem",
       borderRadius: 8,
       marginBottom: "1rem"
-    }}>
+    }}> 
       <h2>Audio Queue</h2>
       <ul style={{ listStyle: "none", padding: 0 }}>
         {queue.map(user => (
@@ -170,7 +170,7 @@ function DonationModal({ open, onClose, feeInfo, donationAmount, setDonationAmou
           padding: 16,
           marginTop: 16,
           color: "#ddd"
-        }}>
+        }}> 
           <h3>Try a Donation Amount</h3>
           <input
             type="number"
@@ -269,7 +269,7 @@ export default function App() {
       background: "#181818",
       minHeight: "100vh",
       padding: "2rem"
-    }}>
+    }}> 
       <h1 style={{ color: "#fafafa" }}>Streamer Dashboard</h1>
       <button
         onClick={() => setDonationOpen(true)}
@@ -318,7 +318,7 @@ export default function App() {
             borderRadius: 8,
             padding: 24,
             marginTop: 16
-          }}>
+          }}> 
             <h2 style={{ color: "#fff" }}>Change Your Name</h2>
             <input
               type="text"
@@ -351,7 +351,7 @@ export default function App() {
             padding: 16,
             marginTop: 16,
             color: "#ddd"
-          }}>
+          }}> 
             <h3>Try a Donation Amount</h3>
             <input
               type="number"
@@ -369,7 +369,7 @@ export default function App() {
         color: "#bbb",
         marginTop: "2rem",
         fontSize: "14px"
-      }}>
+      }}> 
         <strong>Note:</strong> This is a <em>demo</em>. No backend or real audio yet.<br />
         Try joining/leaving the queue and promoting users!
       </div>
