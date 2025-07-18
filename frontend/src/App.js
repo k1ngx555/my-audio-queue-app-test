@@ -1,4 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, orderBy, where } from 'firebase/firestore';
 
 // CONFIGURATION (EDIT THESE!)
 // ---------------------------
@@ -8,6 +11,25 @@ const YOUTUBE_VIDEO_ID = "5qap5aO4i9A"; // Demo: Lo-fi livestream
 const PAYPAL_LINK = "https://paypal.me/YOURPAYPAL";
 const KOFI_LINK = "https://ko-fi.com/YOURKOFI";
 const CREDIT_LINK = "https://yourcustomdonate.com";
+
+// Global Firebase variables (provided by the environment)
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Initialize Firebase (outside of component to avoid re-initialization)
+let app;
+let db;
+let auth;
+
+try {
+  app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  auth = getAuth(app);
+} catch (error) {
+  console.error("Error initializing Firebase:", error);
+  // Handle Firebase initialization error gracefully, e.g., show a message to the user
+}
 
 // Shows the live video
 function YouTubeLivestreamEmbed({ videoId }) {
@@ -41,7 +63,7 @@ function YouTubeLiveChatEmbed({ videoId }) {
 }
 
 // Audio queue UI
-function QueuePanel({ queue, currentSpeaker, onPromote, onRemove }) {
+function QueuePanel({ queue, currentSpeaker, onPromote, onRemove, currentUserId }) {
   return (
     <div style={{
       background: "#222",
@@ -57,9 +79,10 @@ function QueuePanel({ queue, currentSpeaker, onPromote, onRemove }) {
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            margin: "0.5rem 0"
+            margin: "0.5rem 0",
+            fontWeight: user.id === currentUserId ? 'bold' : 'normal' // Highlight current user
           }}>
-            <span>{user.name}</span>
+            <span>{user.name} {user.id === currentUserId && "(You)"}</span>
             <div>
               <button onClick={() => onPromote(user)} style={{ marginRight: 5 }}>Promote</button>
               <button onClick={() => onRemove(user)}>Remove</button>
@@ -69,7 +92,7 @@ function QueuePanel({ queue, currentSpeaker, onPromote, onRemove }) {
       </ul>
       {currentSpeaker && (
         <div style={{ marginTop: 10 }}>
-          <strong>Current Speaker:</strong> {currentSpeaker.name}
+          <strong>Current Speaker:</strong> {currentSpeaker.name} {currentSpeaker.id === currentUserId && "(You)"}
         </div>
       )}
     </div>
@@ -198,18 +221,16 @@ function DonationModal({ open, onClose, feeInfo, donationAmount, setDonationAmou
 }
 
 export default function App() {
-  const [queue, setQueue] = useState([
-    { id: "1", name: "Alice" },
-    { id: "2", name: "Bob" },
-    { id: "3", name: "Charlie" }
-  ]);
-  const [currentSpeaker, setCurrentSpeaker] = useState(null);
+  const [queue, setQueue] = useState([]); // Initialize as empty, will load from Firestore
+  const [currentSpeaker, setCurrentSpeaker] = useState(null); // Will load from Firestore
   const [notifications, setNotifications] = useState([]);
-  const [userName, setUserName] = useState("Streamer");
+  const [userName, setUserName] = useState(""); // User will input their name
   const [isInQueue, setIsInQueue] = useState(false);
   const [donationOpen, setDonationOpen] = useState(false);
   const [donationAmount, setDonationAmount] = useState(5.00);
   const [feeInfo, setFeeInfo] = useState("");
+  const [userId, setUserId] = useState(null); // Firebase User ID
+  const [isAuthReady, setIsAuthReady] = useState(false); // Track Firebase auth state
 
   // Fee calculation (edit platform fee as you like!)
   function calculateFees(amount) {
@@ -220,7 +241,7 @@ export default function App() {
   }
 
   // Update fee breakdown
-  React.useEffect(() => {
+  useEffect(() => {
     setFeeInfo(calculateFees(donationAmount));
   }, [donationAmount]);
 
@@ -229,39 +250,181 @@ export default function App() {
   };
   const clearNotification = id => setNotifications(n => n.filter(i => i.id !== id));
 
-  const joinQueue = () => {
-    if (!userName.trim()) {
-      addNotification("Enter your name to join!", "error");
+  // --- Firebase Initialization and Authentication ---
+  useEffect(() => {
+    if (!auth) {
+      addNotification("Firebase Auth not initialized. Check console for errors.", "error");
       return;
     }
-    if (queue.find(u => u.name === userName)) {
-      addNotification("Already in queue!", "error");
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setIsAuthReady(true);
+        // Try to load user's last known name from Firestore if available
+        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile`, 'data');
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          setUserName(userDocSnap.data().name || `User-${user.uid.substring(0, 4)}`);
+        } else {
+          setUserName(`User-${user.uid.substring(0, 4)}`); // Default name
+          // Create initial user profile
+          await setDoc(userDocRef, { name: `User-${user.uid.substring(0, 4)}` });
+        }
+      } else {
+        // Sign in anonymously if no user is authenticated
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+          } else {
+            await signInAnonymously(auth);
+          }
+        } catch (error) {
+          console.error("Error signing in:", error);
+          addNotification(`Authentication failed: ${error.message}`, "error");
+        }
+      }
+    });
+
+    return () => unsubscribe(); // Clean up auth listener
+  }, [auth]); // Depend on 'auth' instance
+
+  // --- Firestore Real-time Queue Listener ---
+  useEffect(() => {
+    if (!db || !isAuthReady || !userId) {
+      // Wait for Firestore and Auth to be ready
       return;
     }
-    setQueue(q => [...q, { id: Date.now().toString(), name: userName }]);
-    setIsInQueue(true);
-    addNotification(`${userName} joined the queue.`, "success"); // FIXED: Removed trailing backtick
+
+    const queueCollectionRef = collection(db, `artifacts/${appId}/public/data/queue`);
+    const currentSpeakerDocRef = doc(db, `artifacts/${appId}/public/data/currentSpeaker`, 'speaker');
+
+    // Listen for queue changes
+    const unsubscribeQueue = onSnapshot(query(queueCollectionRef), (snapshot) => {
+      const updatedQueue = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort by timestamp to maintain join order
+      updatedQueue.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      setQueue(updatedQueue);
+      setIsInQueue(updatedQueue.some(u => u.id === userId));
+    }, (error) => {
+      console.error("Error fetching queue:", error);
+      addNotification(`Failed to load queue: ${error.message}`, "error");
+    });
+
+    // Listen for current speaker changes
+    const unsubscribeSpeaker = onSnapshot(currentSpeakerDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setCurrentSpeaker(docSnap.data());
+      } else {
+        setCurrentSpeaker(null);
+      }
+    }, (error) => {
+      console.error("Error fetching current speaker:", error);
+      addNotification(`Failed to load current speaker: ${error.message}`, "error");
+    });
+
+    return () => {
+      unsubscribeQueue();
+      unsubscribeSpeaker();
+    }; // Clean up listeners
+  }, [db, isAuthReady, userId]); // Depend on db, auth readiness, and userId
+
+  // --- Firestore Operations ---
+
+  const updateUserNameInFirestore = async (newName) => {
+    if (!db || !userId) return;
+    try {
+      const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile`, 'data');
+      await setDoc(userDocRef, { name: newName }, { merge: true });
+      addNotification("Name updated!", "success");
+    } catch (error) {
+      console.error("Error updating user name:", error);
+      addNotification(`Failed to update name: ${error.message}`, "error");
+    }
   };
 
-  const leaveQueue = () => {
-    setQueue(q => q.filter(u => u.name !== userName));
-    setIsInQueue(false);
-    addNotification(`${userName} left the queue.`, "info");
-    if (currentSpeaker && currentSpeaker.name === userName) setCurrentSpeaker(null);
+  const joinQueue = async () => {
+    if (!userId || !userName.trim()) {
+      addNotification("Enter your name and ensure authentication is ready to join!", "error");
+      return;
+    }
+    if (queue.some(u => u.id === userId)) {
+      addNotification("You are already in the queue!", "info");
+      return;
+    }
+    try {
+      const queueCollectionRef = collection(db, `artifacts/${appId}/public/data/queue`);
+      await setDoc(doc(queueCollectionRef, userId), {
+        name: userName,
+        timestamp: Date.now(),
+        userId: userId // Store userId explicitly in the document data
+      });
+      addNotification(`${userName} joined the queue.`, "success");
+    } catch (error) {
+      console.error("Error joining queue:", error);
+      addNotification(`Failed to join queue: ${error.message}`, "error");
+    }
   };
 
-  const promoteToSpeaker = user => {
-    setCurrentSpeaker(user);
-    setQueue(q => q.filter(u => u.id !== user.id));
-    addNotification(`${user.name} is now speaking.`, "success"); // FIXED: Removed trailing backtick
+  const leaveQueue = async () => {
+    if (!userId) return;
+    try {
+      const queueDocRef = doc(db, `artifacts/${appId}/public/data/queue`, userId);
+      await deleteDoc(queueDocRef);
+      addNotification(`${userName} left the queue.`, "info");
+      if (currentSpeaker && currentSpeaker.id === userId) {
+        await setDoc(doc(db, `artifacts/${appId}/public/data/currentSpeaker`, 'speaker'), {}); // Clear speaker
+      }
+    } catch (error) {
+      console.error("Error leaving queue:", error);
+      addNotification(`Failed to leave queue: ${error.message}`, "error");
+    }
   };
 
-  const removeFromQueue = user => {
-    setQueue(q => q.filter(u => u.id !== user.id));
-    addNotification(`${user.name} removed from queue.`, "info");
+  const promoteToSpeaker = async (user) => {
+    if (!db || !user) return;
+    try {
+      // Set current speaker
+      await setDoc(doc(db, `artifacts/${appId}/public/data/currentSpeaker`, 'speaker'), {
+        id: user.id,
+        name: user.name,
+        timestamp: Date.now()
+      });
+      // Remove from queue
+      const queueDocRef = doc(db, `artifacts/${appId}/public/data/queue`, user.id);
+      await deleteDoc(queueDocRef);
+      addNotification(`${user.name} is now speaking.`, "success");
+    } catch (error) {
+      console.error("Error promoting to speaker:", error);
+      addNotification(`Failed to promote ${user.name}: ${error.message}`, "error");
+    }
   };
 
-  const endSpeaker = () => setCurrentSpeaker(null);
+  const removeFromQueue = async (user) => {
+    if (!db || !user) return;
+    try {
+      const queueDocRef = doc(db, `artifacts/${appId}/public/data/queue`, user.id);
+      await deleteDoc(queueDocRef);
+      addNotification(`${user.name} removed from queue.`, "info");
+      if (currentSpeaker && currentSpeaker.id === user.id) {
+        await setDoc(doc(db, `artifacts/${appId}/public/data/currentSpeaker`, 'speaker'), {}); // Clear speaker
+      }
+    } catch (error) {
+      console.error("Error removing from queue:", error);
+      addNotification(`Failed to remove ${user.name}: ${error.message}`, "error");
+    }
+  };
+
+  const endSpeaker = async () => {
+    if (!db) return;
+    try {
+      await setDoc(doc(db, `artifacts/${appId}/public/data/currentSpeaker`, 'speaker'), {}); // Clear speaker
+      addNotification("Current speaker ended.", "info");
+    } catch (error) {
+      console.error("Error ending speaker:", error);
+      addNotification(`Failed to end speaker: ${error.message}`, "error");
+    }
+  };
 
   return (
     <div style={{
@@ -271,6 +434,9 @@ export default function App() {
       padding: "2rem"
     }}> 
       <h1 style={{ color: "#fafafa" }}>Streamer Dashboard</h1>
+      {userId && <p style={{ color: "#aaa" }}>Your User ID: {userId}</p>}
+      {!isAuthReady && <p style={{ color: "#ffeb3b" }}>Connecting to Firebase...</p>}
+      
       <button // This is the button that was problematic, now back in with clean code
         onClick={() => setDonationOpen(true)}
         style={{
@@ -310,6 +476,7 @@ export default function App() {
             currentSpeaker={currentSpeaker}
             onPromote={promoteToSpeaker}
             onRemove={removeFromQueue}
+            currentUserId={userId} // Pass current user ID to highlight in queue
           />
           <button onClick={endSpeaker} style={{ marginBottom: 12 }}>End Speaker</button>
           <NotificationContainer notifications={notifications} onRemove={clearNotification} />
@@ -337,12 +504,12 @@ export default function App() {
               <button onClick={joinQueue} style={{
                 padding: "8px 20px",
                 borderRadius: 4
-              }}>Join Queue</button>
+              }} disabled={!isAuthReady}>Join Queue</button>
             ) : (
               <button onClick={leaveQueue} style={{
                 padding: "8px 20px",
                 borderRadius: 4
-              }}>Leave Queue</button>
+              }} disabled={!isAuthReady}>Leave Queue</button>
             )}
           </div>
           <div style={{
