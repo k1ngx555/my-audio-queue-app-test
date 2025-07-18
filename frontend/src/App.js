@@ -240,6 +240,7 @@ export default function App() {
     }
     setQueue(q => [...q, { id: Date.now().toString(), name: userName }]);
     setIsInQueue(true);
+    addNotification(`${userName} joined the queue.`, "success"); // FIXED: Removed trailing backtick
   };
 
   const leaveQueue = () => {
@@ -252,7 +253,7 @@ export default function App() {
   const promoteToSpeaker = user => {
     setCurrentSpeaker(user);
     setQueue(q => q.filter(u => u.id !== user.id));
-    addNotification(`${user.name} is now speaking.`, "success`);
+    addNotification(`${user.name} is now speaking.`, "success"); // FIXED: Removed trailing backtick
   };
 
   const removeFromQueue = user => {
@@ -270,7 +271,7 @@ export default function App() {
       padding: "2rem"
     }}> 
       <h1 style={{ color: "#fafafa" }}>Streamer Dashboard</h1>
-      <button
+      <button // This is the button that was problematic, now back in with clean code
         onClick={() => setDonationOpen(true)}
         style={{
           background: "#4caf50",
