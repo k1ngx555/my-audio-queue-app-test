@@ -78,7 +78,7 @@ function QueuePanel({ queue, currentSpeaker, onPromote, onRemove }) {
 
 // Notification display
 function NotificationContainer({ notifications, onRemove }) {
-  return ( // <-- Added 'return' here
+  return (
     <div style={{ position: "fixed", top: 20, right: 20, zIndex: 99 }}>
       {notifications.map(n => (
         <div
@@ -106,7 +106,7 @@ function NotificationContainer({ notifications, onRemove }) {
         </div>
       ))}
     </div>
-  ); // <-- Added closing parenthesis and curly brace here
+  );
 }
 
 // Custom Donation Modal (no 3rd-party branding!)
